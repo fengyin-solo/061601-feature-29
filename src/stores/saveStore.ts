@@ -1,6 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useGameStore } from './gameStore'
+import type { CharacterState } from './gameStore'
+import gameConfig from '../config/gameConfig'
+import { getTimeLabel } from '../utils/gameUtils'
 
 export interface SaveSlot {
   id: number
@@ -9,6 +12,19 @@ export interface SaveSlot {
   time: string
   timestamp: number
   data: string
+}
+
+export interface AutoSaveSummary {
+  timestamp: number
+  formattedTime: string
+  day: number
+  timeSlot: string
+  resources: number
+  unlockedCount: number
+  cardCount: number
+  eventCount: number
+  logCount: number
+  topCharacters: { name: string; affinity: number; mood: number }[]
 }
 
 const STORAGE_KEY = 'love_story_game_saves'
@@ -161,6 +177,101 @@ export const useSaveStore = defineStore('save', () => {
     saveToStorage(SETTINGS_KEY, { autoSave: enabled })
   }
 
+  function clearAutoSave() {
+    localStorage.removeItem(AUTOSAVE_KEY)
+  }
+
+  function getAutoSaveRaw(): { data: string; timestamp: number; day: number; time: string } | null {
+    try {
+      const data = localStorage.getItem(AUTOSAVE_KEY)
+      if (!data) return null
+      return JSON.parse(data)
+    } catch (e) {
+      console.error('Failed to get autosave raw:', e)
+      return null
+    }
+  }
+
+  function getAutoSaveSummary(): AutoSaveSummary | null {
+    const raw = getAutoSaveRaw()
+    if (!raw) return null
+
+    try {
+      const state = JSON.parse(raw.data)
+      const characters: CharacterState[] = state.characters || []
+      const unlockedChars = characters.filter(c => c.unlocked)
+
+      const topCharacters = unlockedChars
+        .map(c => {
+          const config = gameConfig.characters.find(cc => cc.id === c.id)
+          return {
+            name: config?.name || c.id,
+            affinity: c.affinity,
+            mood: c.mood
+          }
+        })
+        .sort((a, b) => b.affinity - a.affinity)
+        .slice(0, 3)
+
+      const date = new Date(raw.timestamp)
+      const formattedTime = date.toLocaleString('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+
+      return {
+        timestamp: raw.timestamp,
+        formattedTime,
+        day: state.day,
+        timeSlot: getTimeLabel(state.timeSlot),
+        resources: state.resources,
+        unlockedCount: unlockedChars.length,
+        cardCount: (state.collectedCards || []).length,
+        eventCount: (state.triggeredEvents || []).length,
+        logCount: (state.logs || []).length,
+        topCharacters
+      }
+    } catch (e) {
+      console.error('Failed to parse autosave summary:', e)
+      return null
+    }
+  }
+
+  function getInitialSummary(): AutoSaveSummary {
+    const unlockedChars = gameConfig.characters.filter(c => c.unlocked && !c.hidden)
+    const topCharacters = unlockedChars
+      .map(c => ({
+        name: c.name,
+        affinity: c.baseAffinity,
+        mood: c.baseMood
+      }))
+      .slice(0, 3)
+
+    const now = Date.now()
+    const date = new Date(now)
+    const formattedTime = date.toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+
+    return {
+      timestamp: now,
+      formattedTime,
+      day: 1,
+      timeSlot: getTimeLabel('morning'),
+      resources: gameConfig.initialResources,
+      unlockedCount: unlockedChars.length,
+      cardCount: 0,
+      eventCount: 0,
+      logCount: 0,
+      topCharacters
+    }
+  }
+
   function getAvailableSlotId(): number {
     const usedIds = saveSlots.value.map(s => s.id)
     let id = 1
@@ -181,6 +292,9 @@ export const useSaveStore = defineStore('save', () => {
     loadAutoSave,
     hasAutoSave,
     toggleAutoSave,
+    clearAutoSave,
+    getAutoSaveSummary,
+    getInitialSummary,
     getAvailableSlotId
   }
 })
